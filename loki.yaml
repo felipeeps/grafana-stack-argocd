@@ -1,0 +1,183 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+  labels:
+    project: observability
+  finalizers:
+    - resporjectources-finalizer.argocd.argoproj.io
+
+spec:
+  project: default
+  syncPolicy:
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - PrunePropagationPolicy=background
+      - CreateNamespace=true
+  source:
+    chart: loki
+    repoURL: "https://grafana.github.io/helm-charts"
+    targetRevision: 3.6.0
+    helm:
+      values: |-
+        loki:
+          auth_enabled: false
+          server:
+            http_listen_port: 3100
+            grpc_listen_port: 9095
+            grpc_server_max_recv_msg_size: 104857600
+            grpc_server_max_send_msg_size: 104857600
+            http_server_read_timeout: 300s
+          limits_config:
+            enforce_metric_name: false
+            reject_old_samples: false
+            reject_old_samples_max_age: 24h
+            max_cache_freshness_per_query: 10m
+            split_queries_by_interval: 15m
+            max_entries_limit_per_query: 1000
+            max_query_length: 24h
+            max_query_lookback: 7d
+            max_query_parallelism: 20
+          storage:
+            bucketNames:
+              chunks: chunks
+              ruler: ruler
+              admin: admin
+            type: s3
+            filesystem:
+              chunks_directory: /var/loki/chunks
+              rules_directory: /var/loki/rules
+          query_range:
+            align_queries_with_step: true
+            max_retries: 5
+            split_queries_by_interval: 15m
+            cache_results: true
+            results_cache:
+              cache:
+                enable_fifocache: true
+                fifocache:
+                  max_size_items: 1024
+                  validity: 24h
+          storage_config:
+            hedging:
+              at: "250ms"
+              max_per_second: 20
+              up_to: 3
+          tsdb_shipper:
+              active_index_directory: /data/tsdb-index
+              cache_location: /data/tsdb-cache
+              index_gateway_client:
+                  server_address: dns:///index-gateway.observability.svc.cluster.local:9095
+              query_ready_num_days: 7
+              shared_store: gcs
+          schemaConfig:
+            configs:
+              - from: "2022-01-11"
+                index:
+                  period: 24h
+                  prefix: loki_index_
+                object_store: s3
+                schema: v11
+                store: boltdb-shipper
+              - from: "2022-12-09"
+                index:
+                  period: 24h
+                  prefix: tsdb_index_
+                object_store: s3
+                schema: v12
+                store: tsdb
+        write:
+          replicas: 1
+          autoscaling:
+            enabled: true
+            minReplicas: 1
+            maxReplicas: 4
+            targetCPUUtilizationPercentage: 60
+            targetMemoryUtilizationPercentage: 60
+          resources:
+            requests:
+              cpu: 150m
+              memory: 1Gi
+            limits:
+              cpu: 200m
+              memory: 2Gi
+          nodeSelector: {node-group: node-name}
+          persistence:
+            size: 10Gi
+            storageClass: gp3
+        read:
+          replicas: 1
+          autoscaling:
+            enabled: true
+            minReplicas: 1
+            maxReplicas: 4
+            targetCPUUtilizationPercentage: 60
+            targetMemoryUtilizationPercentage: 60
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              cpu: 300m
+              memory: 2Gi
+          nodeSelector: {node-group: node-name}
+          persistence:
+            size: 5Gi
+            storageClass: gp3
+        gateway:
+          enabled: true
+          replicas: 1
+          autoscaling:
+            enabled: true
+            minReplicas: 1
+            maxReplicas: 2
+            targetCPUUtilizationPercentage: 60
+            targetMemoryUtilizationPercentage: 60
+          resources:
+            requests:
+              cpu: 100m
+              memory: 40Mi
+            limits:
+              cpu: 120m
+              memory: 50Mi
+          deploymentStrategy:
+            type: RollingUpdate
+          terminationGracePeriodSeconds: 30
+          nodeSelector: {node-group: node-name1}
+          service:
+            port: 80
+            type: ClusterIP
+          ingress:
+            enabled: false
+          basicAuth:
+            enabled: false
+        minio:
+          enabled: true
+          replicas: 1
+          drivesPerNode: 2
+          rootUser: user
+          rootPassword: password
+          buckets:
+            - name: chunks
+              policy: none
+              purge: false
+            - name: ruler
+              policy: none
+              purge: false
+            - name: admin
+              policy: none
+              purge: false
+          persistence:
+            size: 20Gi
+            storageClass: gp3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 700Mi
+            limits:
+                cpu: 120m
+                memory: 800Mi
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: observability
