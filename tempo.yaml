@@ -1,0 +1,70 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tempo
+  namespace: argocd
+  labels:
+    name: observability
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+
+spec:
+  project: default
+  syncPolicy:
+    syncOptions:
+      - ApplyOutOfSyncOnly=true
+      - PrunePropagationPolicy=background
+      - CreateNamespace=true
+  source:
+    chart: tempo
+    repoURL: "https://grafana.github.io/helm-charts"
+    targetRevision: 0.16.1
+    helm:
+      parameters:
+        - name: tempo.searchEnabled
+          value: "true"
+
+        - name: serviceMonitor.enabled
+          value: "true"
+        - name: serviceMonitor.additionalLabels.release
+          value: "observability-kube-prometheus"
+
+        - name: persistence.enabled
+          value: "true"
+        - name: persistence.size
+          value: "10Gi"
+        - name: persistence.storageClass
+          value: "gp3"
+        - name: replicas
+          value: '1'
+      values: |-
+        nodeSelector: {"nodegroup-name": "node-name"}
+        tempo:
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 600m
+              memory: 2Gi
+          server:
+            grpc_server_max_recv_msg_size: 8388608
+            grpc_server_max_send_msg_size: 8388608
+          storage:
+            trace:
+              backend: s3
+              s3:
+                bucket: bucket-name
+                endpoint: s3.dualstack.region.amazonaws.com
+                region: region-aws
+                access_key: your-access-key
+                secret_key: your-secret-key
+                insecure: false
+          global_overrides:
+            max_traces_per_user: 60000
+            max_search_bytes_per_trace: 1500000
+          retention: 24h
+
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: observability
